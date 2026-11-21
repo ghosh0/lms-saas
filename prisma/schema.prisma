@@ -1,0 +1,167 @@
+// Prisma Schema for LMS SaaS with Better Auth & Razorpay Credits
+// Database: Neon (Serverless PostgreSQL)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// =============================================================================
+// Better Auth Core Models
+// =============================================================================
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  role          String    @default("user") // "admin" or "user"
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Credits balance: 1 live course creation costs 5 credits
+  credits       Int       @default(0) // every new user starts with 0 credits
+
+  // Relations
+  sessions           Session[]
+  accounts           Account[]
+  coursesCreated     Lesson[]             @relation("UserCreatedCourses")
+  purchases          Purchase[]           @relation("UserPurchasedCourses")
+  creditTransactions CreditTransaction[]
+  learningSessions   LearningSession[]
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String    @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime? @default(now())
+  updatedAt  DateTime? @updatedAt
+
+  @@map("verification")
+}
+
+// =============================================================================
+// LMS Business Models (Courses, Marketplace, PDF Notes, Sessions)
+// =============================================================================
+
+model Lesson {
+  id           String   @id @default(cuid())
+  title        String
+  description  String
+  subject      String
+  gradeLevel   String
+  systemPrompt String   @db.Text
+  durationMins Int      @default(30)
+  isPublished  Boolean  @default(true)
+
+  // Creator & Marketplace Pricing
+  creatorId    String?
+  creator      User?    @relation("UserCreatedCourses", fields: [creatorId], references: [id], onDelete: SetNull)
+  priceInRupees Int     @default(0) // 0 = free, or custom price set by creator
+
+  // Notes / PDF Attachment
+  pdfUrl       String?
+  pdfName      String?
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  purchases        Purchase[]
+  learningSessions LearningSession[]
+
+  @@index([creatorId])
+  @@map("lessons")
+}
+
+model Purchase {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation("UserPurchasedCourses", fields: [userId], references: [id], onDelete: Cascade)
+  lessonId            String
+  lesson              Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  amountPaidInRupees  Int
+  razorpayPaymentId   String?
+  createdAt           DateTime @default(now())
+
+  @@unique([userId, lessonId])
+  @@index([userId])
+  @@index([lessonId])
+  @@map("purchases")
+}
+
+model CreditTransaction {
+  id                 String   @id @default(cuid())
+  userId             String
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tier               String   // TIER_5, TIER_55, TIER_120
+  credits            Int      // 5, 55, 120
+  amountInRupees     Int      // 50, 500, 1000
+  razorpayOrderId    String   @unique
+  razorpayPaymentId  String?
+  status             String   @default("PENDING") // PENDING, COMPLETED, FAILED
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([userId])
+  @@map("credit_transactions")
+}
+
+model LearningSession {
+  id        String    @id @default(cuid())
+  lessonId  String
+  lesson    Lesson    @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  roomName  String    @unique
+  userId    String
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  @@index([lessonId])
+  @@index([userId])
+  @@map("learning_sessions")
+}
